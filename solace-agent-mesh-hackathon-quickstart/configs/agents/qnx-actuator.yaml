@@ -1,0 +1,67 @@
+log:
+  stdout_log_level: INFO
+
+!include ../shared_config.yaml
+
+# =============================================================================
+# QNX Actuator Agent - Executes water command via Backend
+# =============================================================================
+
+apps:
+  - name: qnx-actuator_app
+    app_base_path: .
+    app_module: solace_agent_mesh.agent.sac.app
+
+    broker:
+      <<: *broker_connection
+
+    app_config:
+      namespace: ${NAMESPACE, sam/}
+      supports_streaming: false
+      agent_name: "QnxActuatorAgent"
+      display_name: "QNX Actuator (Water via Backend)"
+      model: *general_model
+
+      instruction: |
+        You are an execution-only agent. You DO NOT do reasoning.
+        You receive a JSON command:
+          {"plant_id":"...", "water_ml": <number>, "reason":"optional"}
+
+        You must call the backend to execute/queue the command:
+          POST ${BACKEND_BASE_URL}/qnx/command/water
+          body: {"plant_id":"...", "water_ml": <number>, "reason":"...", "source":"sam"}
+
+        Return JSON only: the backend response.
+        Never claim you controlled hardware directly—only report backend results.
+
+      tools:
+        - tool_type: builtin
+          tool_name: web_request
+
+      session_service:
+        type: ${PERSISTENCE_TYPE, memory}
+        database_url: ${CUSTOM_AGENT_DATABASE_URL,}
+
+      artifact_service: *default_artifact_service
+
+      agent_card:
+        description: >
+          Executes/queues water-bucket servo commands by calling the backend endpoint
+          /qnx/command/water. Backend converts water_ml to servo angle and forwards to QNX
+          when available. Returns backend JSON only.
+        defaultInputModes: ["text"]
+        defaultOutputModes: ["text", "file"]
+        skills:
+          - id: "send_water_command"
+            name: "Send Water Command"
+            description: "POST command to backend; backend computes servo angle"
+
+      agent_card_publishing:
+        interval_seconds: 10
+
+      agent_discovery:
+        enabled: true
+
+      inter_agent_communication:
+        allow_list: ["OrchestratorAgent"]
+        request_timeout_seconds: 60

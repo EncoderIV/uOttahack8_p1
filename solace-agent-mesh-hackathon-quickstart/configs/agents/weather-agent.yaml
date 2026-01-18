@@ -3,6 +3,10 @@ log:
 
 !include ../shared_config.yaml
 
+# =============================================================================
+# Weather Agent - Fetches weather snapshot from Backend (no geolocation here)
+# =============================================================================
+
 apps:
   - name: weather-agent_app
     app_base_path: .
@@ -15,29 +19,22 @@ apps:
       namespace: ${NAMESPACE, sam/}
       supports_streaming: true
       agent_name: "WeatherAgent"
-      display_name: "Weather Snapshot (Data)"
+      display_name: "Weather Snapshot (Backend)"
       model: *general_model
 
       instruction: |
-        You produce a compact weather snapshot for plant care reasoning.
-        If the user provides raw weather numbers, reformat them into the JSON schema below.
-        If the user provides only a location and time, ask for the minimum missing fields
-        OR return a placeholder structure with nulls and a "needs" list.
+        You are a data-only agent.
+        You do NOT reason or give plant advice.
 
-        OUTPUT JSON ONLY:
-        {
-          "location": "...",
-          "ts": "...",
-          "outside": { "temp_c": null, "humidity_percent": null, "wind_kph": null, "precip_mm_6h": null },
-          "daylight": { "sunrise": null, "sunset": null },
-          "needs": ["temp_c", "humidity_percent", "sunrise", "sunset"]  // only if missing
-        }
+        Always fetch the latest weather snapshot from the backend:
+          GET ${BACKEND_BASE_URL}/weather
 
-        Do not give advice; only return data.
+        Return JSON only (the backend response).
+        If backend returns an error (e.g., no_location), return that error JSON only.
 
       tools:
-        - tool_type: builtin-group
-          group_name: artifact_management
+        - tool_type: builtin
+          tool_name: web_request
 
       session_service:
         type: ${PERSISTENCE_TYPE, memory}
@@ -47,10 +44,14 @@ apps:
 
       agent_card:
         description: >
-          Weather data agent - returns a compact weather snapshot JSON for the advisor agent.
-          Does not provide plant recommendations.
+          Fetches a compact weather snapshot from the local backend (which already has user
+          location). Returns JSON only. No recommendations or reasoning.
         defaultInputModes: ["text"]
         defaultOutputModes: ["text", "file"]
+        skills:
+          - id: "fetch_weather"
+            name: "Fetch Weather"
+            description: "Calls backend /weather and returns snapshot JSON"
 
       agent_card_publishing:
         interval_seconds: 10
@@ -60,4 +61,4 @@ apps:
 
       inter_agent_communication:
         allow_list: ["OrchestratorAgent"]
-        request_timeout_seconds: 120
+        request_timeout_seconds: 60

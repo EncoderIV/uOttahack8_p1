@@ -1,0 +1,121 @@
+############################################
+# GLOBAL
+############################################
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.bak
+*.old
+
+############################################
+# ENV / SECRETS (NEVER COMMIT)
+############################################
+.env
+.env.*
+!.env.example
+
+############################################
+# PYTHON (BACKEND)
+############################################
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+############################################
+# FASTAPI / UVICORN
+############################################
+*.pid
+
+############################################
+# NODE / REACT (FRONTEND)
+############################################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+.out/
+
+# Vite / React cache
+.vite/
+.cache/
+
+############################################
+# SOLACE / DOCKER
+############################################
+# Docker artifacts
+*.tar
+*.img
+*.log
+
+# Local Docker overrides
+docker-compose.override.yml
+
+############################################
+# MEDIA / STREAMS (CAMERA)
+############################################
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+*.mjpeg
+*.webm
+
+# If you want sample images tracked, whitelist:
+# !Frontend/public/sample.jpg
+
+############################################
+# IDEs
+############################################
+.vscode/
+.idea/
+*.iml
+
+############################################
+# WINDOWS
+############################################
+Desktop.ini
+$RECYCLE.BIN/
+
+############################################
+# QNX / HARDWARE TEMP FILES
+############################################
+*.bin
+*.hex
+*.elf
+*.map
+*.o
+
+############################################
+# MISC
+############################################
+coverage/
+logs/
+tmp/
+temp/

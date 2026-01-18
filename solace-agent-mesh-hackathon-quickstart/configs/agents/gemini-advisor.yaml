@@ -4,10 +4,8 @@ log:
 !include ../shared_config.yaml
 
 # =============================================================================
-# HACKATHON: Gemini Advisor Agent (Reasoning Layer)
-# =============================================================================
-# Takes PlantStateAgent output + WeatherAgent snapshot + user notes and generates
-# actionable guidance. Does NOT directly actuate hardware (orchestrator decides).
+# Gemini Advisor Agent - Final reasoning layer
+# Outputs water recommendation in mL (bucket capacity ~21.8 mL)
 # =============================================================================
 
 apps:
@@ -22,35 +20,41 @@ apps:
       namespace: ${NAMESPACE, sam/}
       supports_streaming: true
       agent_name: "GeminiAdvisorAgent"
-      display_name: "Gemini Advisor (Context + Plan)"
+      display_name: "Gemini Advisor (Water mL + Plan)"
       model: *general_model
 
       instruction: |
-        You are the higher-level reasoning advisor for a plant monitoring system.
+        You are the final reasoning agent for a plant monitoring system.
 
-        INPUTS you may be given (often as JSON blocks):
-        1) plant_state: output from PlantStateAgent (state/confidence/reasons/actions)
-        2) weather: compact weather snapshot (outside conditions + daylight)
-        3) user_context: { "indoors": true/false, "near_window": true/false, "plant_type": "...", "notes": "..." }
+        You will receive JSON blocks:
+        - plant_state: output from PlantStateAgent
+        - weather: output from WeatherAgent (backend weather snapshot)
+        - telemetry: latest telemetry (temp/humidity/pressure + optional vision)
 
-        YOUR JOB:
-        - Produce a short, practical recommendation for what to do next.
-        - Identify risks for the next 6–24 hours (e.g., low light in winter, cold risk if outdoors).
-        - Suggest at most 3 actions; keep them realistic given limited hardware.
-        - If uncertainty is high, request the minimum additional info (e.g., "indoors or outdoors?" or "new photo").
+        HARD CONSTRAINTS:
+        - Bucket capacity is ~21.8 mL (2.7 cm diameter, 3.8 cm height). Never recommend more than 21.8 mL.
+        - If plant_state.state is CHECK_SENSOR, do NOT recommend watering (water_ml = 0).
+        - If plant_state.state is ESCALATE and vision shows form loss, prioritize user intervention and keep water conservative unless you have soil moisture (you don't).
+        - You do NOT have soil moisture. You must avoid confident watering advice without it.
+          Use conservative recommendations unless clear dehydration signals exist in vision and environment.
 
-        OUTPUT FORMAT (JSON only):
-          {
-            "summary": "...",
-            "risk_forecast": [{"risk":"...", "severity":"low|med|high", "why":"..."}],
-            "recommended_actions": [{"action":"...", "priority":"low|medium|high", "why":"..."}],
-            "questions": ["..."],
-            "confidence": 0.0-1.0
-          }
+        OUTPUT JSON ONLY with this schema:
+        {
+          "summary": "...",
+          "water_recommendation_ml": <number>,   // 0 to 21.8
+          "confidence": 0.0-1.0,
+          "recommended_actions": [{"action":"...", "priority":"low|medium|high", "why":"..."}],
+          "reasons": ["..."],
+          "questions": ["..."]
+        }
 
-        IMPORTANT:
-        - Never claim you executed actions. Only recommend.
-        - Prefer safety: if ESCALATE or CHECK_SENSOR, prioritize notify_user and re-check steps.
+        GUIDELINES FOR water_recommendation_ml:
+        - If HUMIDITY_LOW and TEMP_RISK_HIGH and FORM_LOSS: water_ml should be low (0–5 mL) unless user confirms dry soil.
+        - If only HUMIDITY_LOW: water_ml = 0; recommend humidity increase first.
+        - If OK: water_ml = 0.
+        - If user confirms soil is dry (not provided here), you may go up to 5–10 mL depending on severity.
+
+        The orchestrator will decide whether to send the command to hardware.
 
       tools:
         - tool_type: builtin-group
@@ -64,18 +68,14 @@ apps:
 
       agent_card:
         description: >
-          Gemini Advisor Agent - reasoning layer that combines PlantState output with
-          weather/daylight context and user notes to recommend next actions and forecast risk.
-          Does not actuate hardware; orchestrator applies policy and triggers actions.
+          Final reasoning agent that fuses plant_state + telemetry + weather and outputs a conservative
+          water recommendation in mL (0–21.8 mL) plus a short plan. No direct actuation.
         defaultInputModes: ["text"]
         defaultOutputModes: ["text", "file"]
         skills:
-          - id: "context_reasoning"
-            name: "Context Reasoning"
-            description: "Fuse plant state + weather + context into recommendations"
-          - id: "risk_forecast"
-            name: "Risk Forecast"
-            description: "Predict near-term risks and propose mitigations"
+          - id: "water_ml"
+            name: "Water mL Recommendation"
+            description: "Outputs safe water_recommendation_ml + plan"
 
       agent_card_publishing:
         interval_seconds: 10
