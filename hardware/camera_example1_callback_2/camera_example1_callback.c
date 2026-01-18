@@ -24,6 +24,33 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <jpeglib.h>
+
+int compress_to_jpeg(uint8_t* rgb_data, int width, int height, uint8_t** jpeg_data, unsigned long* jpeg_size) {
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    JSAMPROW row_pointer[1];
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    jpeg_mem_dest(&cinfo, jpeg_data, jpeg_size);
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, 75, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+    while (cinfo.next_scanline < cinfo.image_height) {
+        row_pointer[0] = &rgb_data[cinfo.next_scanline * width * 3];
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+    return 1;
+}
 
 #include <camera/camera_api.h>
 
@@ -69,6 +96,7 @@ static int metadata_fd = -1;
 static char* latest_shm_name = NULL;
 static uint8_t* latest_mapped = NULL;
 static size_t latest_size = 0;
+static int sock = -1;
 
 /**
  * @brief Prints a list of available cameras
@@ -184,6 +212,24 @@ int main(int argc, char* argv[])
     close(metadata_fd);
     metadata_fd = -1;
 
+    // Connect to host for JPEG streaming
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1) {
+        printf("Failed to create socket\n");
+        (void)camera_close(handle);
+        exit(EXIT_FAILURE);
+    }
+    struct sockaddr_in server;
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("192.168.1.100"); // Change to host IP
+    server.sin_port = htons(5001);
+    if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
+        printf("Failed to connect to host\n");
+        close(sock);
+        (void)camera_close(handle);
+        exit(EXIT_FAILURE);
+    }
+
     // Make sure that this camera defaults to a supported frametype
     err = camera_get_vf_property(handle, CAMERA_IMGPROP_FORMAT, &frametype);
     if (err != CAMERA_EOK) {
@@ -250,6 +296,9 @@ int main(int argc, char* argv[])
         free(latest_shm_name);
     }
     shm_unlink("/camera_latest_name");
+    if (sock != -1) {
+        close(sock);
+    }
 
     exit(EXIT_SUCCESS);
 }
@@ -406,15 +455,66 @@ static void processCameraData(camera_handle_t handle, camera_buffer_t* buffer, v
     // Camera data is buffer->framebuf and described by buffer->framedesc.
     // As an example, let's compute channel averages by iterating over the
     // bytes in each line and determining which channel the byte belongs to.
+
+    // Get dimensions
+    uint32_t width = 0, height = 0, stride = 0;
+    switch (buffer->frametype) {
+    case CAMERA_FRAMETYPE_RGB8888:
+        width = buffer->framedesc.rgb8888.width;
+        height = buffer->framedesc.rgb8888.height;
+        stride = buffer->framedesc.rgb8888.stride;
+        break;
+    case CAMERA_FRAMETYPE_BGR8888:
+        width = buffer->framedesc.bgr8888.width;
+        height = buffer->framedesc.bgr8888.height;
+        stride = buffer->framedesc.bgr8888.stride;
+        break;
+    case CAMERA_FRAMETYPE_YCBYCR:
+        width = buffer->framedesc.ycbycr.width;
+        height = buffer->framedesc.ycbycr.height;
+        stride = buffer->framedesc.ycbycr.stride;
+        break;
+    case CAMERA_FRAMETYPE_CBYCRY:
+        width = buffer->framedesc.cbycry.width;
+        height = buffer->framedesc.cbycry.height;
+        stride = buffer->framedesc.cbycry.stride;
+        break;
+    default:
+        width = 0;
+        height = 0;
+        stride = 0;
+        break;
+    }
+
+    // Compress to JPEG and send if RGB8888
+    if (buffer->frametype == CAMERA_FRAMETYPE_RGB8888 && width > 0 && height > 0) {
+        uint8_t* rgb_data = malloc(width * height * 3);
+        if (rgb_data) {
+            for (uint32_t y = 0; y < height; y++) {
+                for (uint32_t x = 0; x < width; x++) {
+                    rgb_data[(y * width + x) * 3] = buffer->framebuf[y * stride + x * 4];
+                    rgb_data[(y * width + x) * 3 + 1] = buffer->framebuf[y * stride + x * 4 + 1];
+                    rgb_data[(y * width + x) * 3 + 2] = buffer->framebuf[y * stride + x * 4 + 2];
+                }
+            }
+            uint8_t* jpeg_data = NULL;
+            unsigned long jpeg_size = 0;
+            compress_to_jpeg(rgb_data, width, height, &jpeg_data, &jpeg_size);
+            free(rgb_data);
+            if (jpeg_data) {
+                send(sock, &jpeg_size, sizeof(unsigned long), 0);
+                send(sock, jpeg_data, jpeg_size, 0);
+                free(jpeg_data);
+            }
+        }
+    }
+
     begin = clock();
     memset(channelAverage, 0x0, sizeof(channelAverage));
     switch (buffer->frametype) {
     case CAMERA_FRAMETYPE_RGB8888:
     {
         // Channel averages ordering: R, G, B
-        uint32_t width = buffer->framedesc.rgb8888.width;
-        uint32_t height = buffer->framedesc.rgb8888.height;
-        uint32_t stride = buffer->framedesc.rgb8888.stride;
         for (uint y = 0; y < height; y++) {
             uint8_t* linePointer = buffer->framebuf + y * stride;
             for (uint i = 0; i < 4 * width; i++) {
@@ -433,9 +533,6 @@ static void processCameraData(camera_handle_t handle, camera_buffer_t* buffer, v
     case CAMERA_FRAMETYPE_BGR8888:
     {
         // Channel averages ordering: R, G, B
-        uint32_t width = buffer->framedesc.bgr8888.width;
-        uint32_t height = buffer->framedesc.bgr8888.height;
-        uint32_t stride = buffer->framedesc.bgr8888.stride;
         for (uint y = 0; y < height; y++) {
             uint8_t* linePointer = buffer->framebuf + y * stride;
             for (uint i = 0; i < 4 * width; i++) {
@@ -454,9 +551,6 @@ static void processCameraData(camera_handle_t handle, camera_buffer_t* buffer, v
     case CAMERA_FRAMETYPE_YCBYCR:
     {
         // Channel averages ordering: Y, Cb, Cr
-        uint32_t width = buffer->framedesc.ycbycr.width;
-        uint32_t height = buffer->framedesc.ycbycr.height;
-        uint32_t stride = buffer->framedesc.ycbycr.stride;
         for (uint y = 0; y < height; y++) {
             uint8_t* linePointer = buffer->framebuf + y * stride;
             for (uint i = 0; i < 2 * width; i++) {
@@ -475,9 +569,6 @@ static void processCameraData(camera_handle_t handle, camera_buffer_t* buffer, v
     case CAMERA_FRAMETYPE_CBYCRY:
     {
         // Channel averages ordering: Y, Cb, Cr
-        uint32_t width = buffer->framedesc.cbycry.width;
-        uint32_t height = buffer->framedesc.cbycry.height;
-        uint32_t stride = buffer->framedesc.cbycry.stride;
         for (uint y = 0; y < height; y++) {
             uint8_t* linePointer = buffer->framebuf + y * stride;
             for (uint i = 0; i < 2 * width; i++) {
