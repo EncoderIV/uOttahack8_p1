@@ -1,0 +1,4 @@
+rpi_gpio.o: C:/Users/ibrah/qnxprojects/uottahack_2/rpi_gpio.c \
+ C:/Users/ibrah/qnxprojects/uottahack_2/public/rpi_gpio.h \
+ C:/Users/ibrah/qnxprojects/uottahack_2/sys/rpi_gpio.h \
+ C:/Users/ibrah/qnxprojects/uottahack_2/aarch64/rpi_gpio.h
