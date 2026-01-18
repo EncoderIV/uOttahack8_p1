@@ -1,0 +1,1 @@
+don't forget to add the sys/ nto/ aarrch64/  folerwith rpi_gpio.c /.h into each osf the lower/ direct sub module
