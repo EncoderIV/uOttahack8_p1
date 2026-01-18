@@ -1,0 +1,88 @@
+log:
+  stdout_log_level: INFO
+
+!include ../shared_config.yaml
+
+# =============================================================================
+# HACKATHON: Gemini Advisor Agent (Reasoning Layer)
+# =============================================================================
+# Takes PlantStateAgent output + WeatherAgent snapshot + user notes and generates
+# actionable guidance. Does NOT directly actuate hardware (orchestrator decides).
+# =============================================================================
+
+apps:
+  - name: gemini-advisor_app
+    app_base_path: .
+    app_module: solace_agent_mesh.agent.sac.app
+
+    broker:
+      <<: *broker_connection
+
+    app_config:
+      namespace: ${NAMESPACE, sam/}
+      supports_streaming: true
+      agent_name: "GeminiAdvisorAgent"
+      display_name: "Gemini Advisor (Context + Plan)"
+      model: *general_model
+
+      instruction: |
+        You are the higher-level reasoning advisor for a plant monitoring system.
+
+        INPUTS you may be given (often as JSON blocks):
+        1) plant_state: output from PlantStateAgent (state/confidence/reasons/actions)
+        2) weather: compact weather snapshot (outside conditions + daylight)
+        3) user_context: { "indoors": true/false, "near_window": true/false, "plant_type": "...", "notes": "..." }
+
+        YOUR JOB:
+        - Produce a short, practical recommendation for what to do next.
+        - Identify risks for the next 6–24 hours (e.g., low light in winter, cold risk if outdoors).
+        - Suggest at most 3 actions; keep them realistic given limited hardware.
+        - If uncertainty is high, request the minimum additional info (e.g., "indoors or outdoors?" or "new photo").
+
+        OUTPUT FORMAT (JSON only):
+          {
+            "summary": "...",
+            "risk_forecast": [{"risk":"...", "severity":"low|med|high", "why":"..."}],
+            "recommended_actions": [{"action":"...", "priority":"low|medium|high", "why":"..."}],
+            "questions": ["..."],
+            "confidence": 0.0-1.0
+          }
+
+        IMPORTANT:
+        - Never claim you executed actions. Only recommend.
+        - Prefer safety: if ESCALATE or CHECK_SENSOR, prioritize notify_user and re-check steps.
+
+      tools:
+        - tool_type: builtin-group
+          group_name: artifact_management
+
+      session_service:
+        type: ${PERSISTENCE_TYPE, memory}
+        database_url: ${CUSTOM_AGENT_DATABASE_URL,}
+
+      artifact_service: *default_artifact_service
+
+      agent_card:
+        description: >
+          Gemini Advisor Agent - reasoning layer that combines PlantState output with
+          weather/daylight context and user notes to recommend next actions and forecast risk.
+          Does not actuate hardware; orchestrator applies policy and triggers actions.
+        defaultInputModes: ["text"]
+        defaultOutputModes: ["text", "file"]
+        skills:
+          - id: "context_reasoning"
+            name: "Context Reasoning"
+            description: "Fuse plant state + weather + context into recommendations"
+          - id: "risk_forecast"
+            name: "Risk Forecast"
+            description: "Predict near-term risks and propose mitigations"
+
+      agent_card_publishing:
+        interval_seconds: 10
+
+      agent_discovery:
+        enabled: true
+
+      inter_agent_communication:
+        allow_list: ["OrchestratorAgent"]
+        request_timeout_seconds: 120

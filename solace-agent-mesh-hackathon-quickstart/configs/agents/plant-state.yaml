@@ -1,0 +1,142 @@
+log:
+  stdout_log_level: INFO
+
+!include ../shared_config.yaml
+
+# =============================================================================
+# HACKATHON: Plant State Agent (Hardware + Camera Form)
+# =============================================================================
+# Evaluates plant health from:
+# - Humidity sensor: 20–90 (%)
+# - Temperature sensor: 0–52 °C (±2 °C uncertainty)
+# - Optional camera morphology ("keeps its form")
+# =============================================================================
+
+apps:
+  - name: plant-state_app
+    app_base_path: .
+    app_module: solace_agent_mesh.agent.sac.app
+
+    broker:
+      <<: *broker_connection
+
+    app_config:
+      namespace: ${NAMESPACE, sam/}
+      supports_streaming: true
+      agent_name: "PlantStateAgent"
+      display_name: "Plant State (Telemetry + Vision)"
+      model: *general_model
+
+      instruction: |
+        You evaluate plant health from hardware telemetry with real sensor constraints
+        and optional camera-based form checks.
+
+        INPUT (JSON provided by user or orchestrator):
+        {
+          "plant_id": "basil_01",
+          "ts": "2026-01-17T22:30:00Z",
+          "sensors": {
+            "humidity_percent": 28,
+            "temperature_c": 38,
+            "temperature_uncertainty_c": 2
+          },
+          "vision": {
+            "keeps_form": false,
+            "wilt_score": 0.72,
+            "lean_angle_deg": 18
+          }
+        }
+
+        HARDWARE CONSTRAINTS:
+        - humidity_percent valid range: 20–90
+        - temperature_c valid range: 0–52
+        - temperature_uncertainty_c defaults to ±2 if missing
+
+        STATES (use only these):
+        OK, HUMIDITY_LOW, HUMIDITY_HIGH, TEMP_RISK_LOW, TEMP_RISK_HIGH,
+        FORM_LOSS, CHECK_SENSOR, ESCALATE
+
+        RULES (apply in order):
+
+        1) Sensor validation:
+           - If humidity <20 or >90 → CHECK_SENSOR
+           - If temperature <0 or >52 → CHECK_SENSOR
+
+        2) Temperature risk:
+           - temp_min = temperature_c - uncertainty
+           - temp_max = temperature_c + uncertainty
+           - If temp_max < 10 → TEMP_RISK_LOW
+           - If temp_min > 35 → TEMP_RISK_HIGH
+
+        3) Humidity risk:
+           - humidity < 35 → HUMIDITY_LOW
+           - humidity > 80 → HUMIDITY_HIGH
+
+        4) Vision / form:
+           - keeps_form == false → FORM_LOSS
+           - wilt_score ≥ 0.6 → FORM_LOSS
+           - lean_angle_deg ≥ 15 → FORM_LOSS
+
+        5) Combine:
+           - FORM_LOSS + any other risk → ESCALATE
+           - Otherwise pick the most severe risk or OK
+
+        OUTPUT (JSON only):
+        {
+          "plant_id": "...",
+          "ts": "...",
+          "state": "...",
+          "confidence": 0.0–1.0,
+          "reasons": ["..."],
+          "recommended_actions": [
+            {"action": "...", "priority": "low|medium|high"}
+          ],
+          "alerts": [],
+          "debug": { "derived": {...}, "inputs": {...} }
+        }
+
+        ACTIONS (choose up to 3):
+        - notify_user
+        - request_new_photo
+        - move_to_shade
+        - add_humidity
+        - reduce_humidity
+        - increase_ventilation
+        - check_sensor_mounting
+        - none
+
+        Be concise. Prefer safety. Return JSON only.
+
+      tools:
+        - tool_type: builtin-group
+          group_name: artifact_management
+
+      session_service:
+        type: ${PERSISTENCE_TYPE, memory}
+        database_url: ${CUSTOM_AGENT_DATABASE_URL,}
+
+      artifact_service: *default_artifact_service
+
+      agent_card:
+        description: >
+          Evaluates plant health from real hardware telemetry (humidity 20–90%,
+          temperature 0–52°C with ±2°C uncertainty) and optional camera morphology
+          signals to verify the plant keeps its form. Returns a compact JSON state,
+          confidence, reasons, and recommended actions. Designed for hackathon demos
+          and easy hardware integration.
+        defaultInputModes: ["text"]
+        defaultOutputModes: ["text", "file"]
+        skills:
+          - id: "evaluate_plant_state"
+            name: "Evaluate Plant State"
+            description: "Classify plant condition from sensors and vision"
+
+      agent_card_publishing:
+        interval_seconds: 10
+
+      agent_discovery:
+        enabled: true
+
+      inter_agent_communication:
+        allow_list: ["OrchestratorAgent"]
+        request_timeout_seconds: 120
